@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Home Measurements</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Plotly -->
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      padding: 20px;
+    }
+    .chart-card {
+      background: white;
+      padding: 16px;
+      margin-bottom: 24px;
+      border-radius: 10px;
+      box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+    }
+    h1 {
+      margin-top: 0;
+    }
+    h2 {
+      margin-top: 0;
+      font-size: 1.1rem;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Home Sensors Dashboard</h1>
+<p>Showing the <strong>last 12 hours</strong> from CSV files generated from InfluxDB.</p>
+
+<div id="charts"></div>
+
+<script>
+  // CSV files to load
+  const csvFiles = [
+    "data/plant_temperature.csv"
+  ];
+
+  // -------------------------
+  // CSV PARSER
+  // -------------------------
+  function parseCsv(text) {
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length <= 1) return { points: [], unit: "" };
+
+    const headers = lines[0].split(",");
+    const idxTime = headers.indexOf("time");
+    const idxVal  = headers.indexOf("value");
+    const idxUnit = headers.indexOf("unit");
+
+    const points = [];
+    let unit = "";
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",");
+      if (cols.length <= Math.max(idxTime, idxVal)) continue;
+
+      const timeStr = cols[idxTime];
+      const dateObj = new Date(timeStr);  // UTC → local auto-conversion
+      if (Number.isNaN(dateObj.getTime())) continue;
+
+      const value = parseFloat(cols[idxVal]);
+      const u = idxUnit >= 0 ? cols[idxUnit] : "";
+      if (!unit && u) unit = u;
+
+      if (!Number.isNaN(value)) {
+        points.push({ time: dateObj, value });
+      }
+    }
+    return { points, unit };
+  }
+
+  // -------------------------
+  // KEEP ONLY LAST N HOURS
+  // -------------------------
+  function sliceLastHours(points, hours) {
+    if (!points.length) return points;
+
+    const last = points[points.length - 1];
+    const cutoff = last.time.getTime() - hours * 3600 * 1000;
+
+    return points.filter(p => p.time.getTime() >= cutoff);
+  }
+
+  // -------------------------
+  // LOAD A CSV AND DRAW THE CHART
+  // -------------------------
+  async function loadAndPlot(csvPath) {
+    try {
+      const response = await fetch(csvPath);
+      if (!response.ok) {
+        console.error("Failed to load", csvPath, response.status);
+        return;
+      }
+
+      const text = await response.text();
+      const { points, unit } = parseCsv(text);
+      if (!points.length) return;
+
+      const lastNh = sliceLastHours(points, 12);
+      if (!lastNh.length) return;
+
+      const labels = lastNh.map(p => p.time);
+      const values = lastNh.map(p => p.value);
+
+      const chartsDiv = document.getElementById("charts");
+      const card = document.createElement("div");
+      card.className = "chart-card";
+
+      const title = document.createElement("h2");
+      const shortName = csvPath.replace("data/", "").replace(".csv", "");
+      title.textContent = shortName;
+      card.appendChild(title);
+
+      const chartDiv = document.createElement("div");
+      card.appendChild(chartDiv);
+      chartsDiv.appendChild(card);
+
+      const trace = {
+        x: labels,
+        y: values,
+        type: "scatter",
+        mode: "lines",
+        line: { width: 2 },
+        name: unit ? `${shortName} (${unit})` : shortName,
+        hovertemplate:
+          "%{x|%H:%M:%S<br>%d-%m-%Y}<br>%{y:.2f} " +
+          (unit || "") +
+          "<extra></extra>"
+      };
+
+      const layout = {
+        margin: { t: 10, r: 15, b: 60, l: 60 },
+
+        xaxis: {
+          title: "Time",
+          tickangle: -30,
+          tickformat: "%H:%M<br>%d-%m-%Y",   // <-- Added year here
+          tickmode: "auto",
+          nticks: 8,
+          automargin: true,
+          type: "date"
+        },
+
+        yaxis: {
+          title: unit || "Value",
+          automargin: true
+        }
+      };
+
+      Plotly.newPlot(chartDiv, [trace], layout, { responsive: true });
+
+    } catch (err) {
+      console.error("Error rendering", csvPath, err);
+    }
+  }
+
+  // -------------------------
+  // LOAD ALL CSV FILES
+  // -------------------------
+  csvFiles.forEach(loadAndPlot);
+</script>
+
+</body>
+</html>
